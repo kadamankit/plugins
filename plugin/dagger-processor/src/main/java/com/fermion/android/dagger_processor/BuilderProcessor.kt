@@ -10,12 +10,12 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
+import com.squareup.kotlinpoet.DelicateKotlinPoetApi
 import com.squareup.kotlinpoet.FileSpec
 import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.ParameterSpec
 import com.squareup.kotlinpoet.TypeSpec
-import com.squareup.kotlinpoet.ksp.toClassName
 import java.io.File
 
 
@@ -30,6 +30,7 @@ class BuilderProcessor(
 //        createTestFile(resolver)
 
         val componentPackageName = getDaggerAppComponentInjector(resolver)
+
         if (componentPackageName != "") {
             val viewFiles = getElements(
                 resolver,
@@ -63,7 +64,9 @@ class BuilderProcessor(
         resolver.getSymbolsWithAnnotation(
             DaggerAppComponent::class.qualifiedName.orEmpty(), inDepth = true
         ).filterIsInstance<KSClassDeclaration>().forEach {
-            componentPackageName = it.toClassName().packageName
+//            componentPackageName = it.toClassName().packageName
+            componentPackageName =
+                getClassName(it, packageName = it.packageName.asString()).packageName
         }
         componentPackageName += ".generated"
         return componentPackageName;
@@ -125,21 +128,28 @@ class BuilderProcessor(
     }
 
     private fun genFragmentModuleFiles(
-        fragmentModuleFiles: MutableList<ClassName>, componentPackageName: String
+        fragmentModuleFiles: MutableList<KSClassDeclaration>, componentPackageName: String
 
     ): Boolean {
         try {
             val moduleFunctions = mutableListOf<FunSpec>()
             fragmentModuleFiles.forEach { fragmentFile ->
-                val packageName = fragmentFile.packageName
-                val fileName = fragmentFile.simpleName + "Module"
+                val packageName = fragmentFile.packageName.asString()
+                val simpleNames = getClassName(fragmentFile, packageName)
+                val fileName = simpleNames.simpleName + "Module"
                 moduleFunctions.add(
                     FunSpec.builder("contribute${fileName}").addAnnotation(
                         ClassName(
                             "dagger.android", "ContributesAndroidInjector"
                         )
                     ).addModifiers(KModifier.ABSTRACT)
-                        .returns(ClassName(packageName, fragmentFile.simpleName)).build()
+                        .returns(
+                            ClassName(
+                                packageName,
+                                simpleNames.simpleName
+                            )
+                        )
+                        .build()
                 )
             }
             deletedFile(componentPackageName, "FragmentBuilderModule")
@@ -169,19 +179,33 @@ class BuilderProcessor(
         }
     }
 
+    private fun getClassName(
+        fragmentFile: KSClassDeclaration,
+        packageName: String
+    ): ClassName {
+        val typesString = checkNotNull(fragmentFile.qualifiedName).asString()
+            .removePrefix("$packageName.")
+        val simpleNames = ClassName(
+            packageName, typesString
+                .split(".")
+        )
+        return simpleNames
+    }
+
 
     private fun genViewModelFiles(
-        viewModelFiles: MutableList<ClassName>, componentPackageName: String
+        viewModelFiles: MutableList<KSClassDeclaration>, componentPackageName: String
 
     ): Boolean {
         try {
             val moduleFunctions = mutableListOf<FunSpec>()
             viewModelFiles.forEach { viewModelFile ->
-                val fileName = viewModelFile.simpleName + "Module"
+                val simpleNames = getClassName(viewModelFile, viewModelFile.packageName.asString())
+                val fileName = simpleNames.simpleName + "Module"
                 moduleFunctions.add(
                     FunSpec.builder("binds${fileName}").addParameter(
                         ParameterSpec.builder(
-                            viewModelFile.simpleName.camelCase(), viewModelFile
+                            simpleNames.simpleName.camelCase(), simpleNames
                         ).build()
                     ).addAnnotation(
                         ClassName(
@@ -196,7 +220,7 @@ class BuilderProcessor(
                             ClassName(
                                 "com.fermion.android.base.di", "ViewModelKey"
                             )
-                        ).addMember("${viewModelFile.simpleName}::class").build()
+                        ).addMember("${simpleNames.simpleName}::class").build()
 
                     ).addModifiers(KModifier.ABSTRACT)
                         .returns(ClassName("androidx.lifecycle", "ViewModel")).build()
@@ -259,18 +283,19 @@ class BuilderProcessor(
         return this.replaceFirst(this.first(), this.first().lowercaseChar())
     }
 
+    @OptIn(DelicateKotlinPoetApi::class)
     private fun getElements(
         resolver: Resolver,
         annotationName: String,
         superClassAnnotation: String,
-    ): MutableList<ClassName> {
-        val result = mutableListOf<ClassName>()
+    ): MutableList<KSClassDeclaration> {
+        val result = mutableListOf<KSClassDeclaration>()
         resolver.getSymbolsWithAnnotation(annotationName, inDepth = true)
             .filterIsInstance<KSClassDeclaration>().forEach { ksClassDeclaration ->
                 ksClassDeclaration.superTypes.forEach { it ->
                     it.resolve().declaration.annotations.forEach {
                         if (it.annotationType.toString() == superClassAnnotation) {
-                            result.add(ksClassDeclaration.toClassName())
+                            result.add(ksClassDeclaration)
                         }
                     }
                 }
@@ -279,5 +304,6 @@ class BuilderProcessor(
         return result;
 
     }
+
 
 }
